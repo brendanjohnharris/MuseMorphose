@@ -1,11 +1,11 @@
 import sys, os, time
-sys.path.append('./model')
+sys.path.append(os.path.join(__file__, 'model'))
 
-from model.musemorphose import MuseMorphose
+from musemorphose import MuseMorphose
 from dataloader import REMIFullSongTransformerDataset
 from torch.utils.data import DataLoader
 
-from utils import pickle_load
+from utilities import pickle_load
 from torch import nn, optim
 import torch
 import numpy as np

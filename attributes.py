@@ -1,4 +1,4 @@
-from utils import pickle_load
+from utilities import pickle_load
 
 import os, pickle
 import numpy as np

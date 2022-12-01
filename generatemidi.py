@@ -1,6 +1,7 @@
 import sys, os, random, time
+import wget
 from copy import deepcopy
-sys.path.append('./model')
+sys.path.append(os.path.join(__file__, 'model'))
 
 from dataloader import REMIFullSongTransformerDataset
 from musemorphose import MuseMorphose
@@ -13,18 +14,21 @@ import yaml
 import numpy as np
 from scipy.stats import entropy
 
-config_path = sys.argv[1]
+config_path = os.path.join(os.path.dirname(__file__), 'config', 'default.yaml')
 config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
 
 device = config['training']['device']
-data_dir = config['data']['data_dir']
-vocab_path = config['data']['vocab_path']
-data_split = 'pickles/test_pieces.pkl'
+data_dir = os.path.join(os.path.dirname(__file__), config['data']['data_dir'][2:])
+vocab_path = os.path.join(os.path.dirname(__file__), config['data']['vocab_path'][2:])
+data_split = os.path.join(os.path.dirname(__file__), 'pickles/test_pieces.pkl')
 
-ckpt_path = sys.argv[2]
-out_dir = sys.argv[3]
-n_pieces = int(sys.argv[4])
-n_samples_per_piece = int(sys.argv[5])
+ckpt_path = os.path.join(os.path.dirname(__file__), 'musemorphose_pretrained_weights.pt')
+if not os.path.isfile(ckpt_path):
+  url = 'https://zenodo.org/record/5119525/files/musemorphose_pretrained_weights.pt?download=1'
+  wget.download(url, ckpt_path)
+out_dir = os.path.join(os.path.dirname(__file__), 'generations')
+n_pieces = 1 # int(sys.argv[4])
+n_samples_per_piece = 1 # int(sys.argv[5])
 
 ###########################################
 # little helpers
@@ -185,25 +189,20 @@ def generate_on_latent_ctrl_vanilla_truncate(
   return generated_final[:-1], time.time() - time_st, np.array(entropies)
 
 
-########################################
-# change attribute classes
-########################################
-def random_shift_attr_cls(n_samples, upper=4, lower=-3):
-  return np.random.randint(lower, upper, (n_samples,))
 
-
-if __name__ == "__main__":
-  dset = REMIFullSongTransformerDataset(
-    data_dir, vocab_path, 
-    do_augment=False,
-    model_enc_seqlen=config['data']['enc_seqlen'], 
-    model_dec_seqlen=config['generate']['dec_seqlen'],
-    model_max_bars=config['generate']['max_bars'],
-    pieces=pickle_load(data_split),
-    pad_to_same=False
-  )
-  pieces = random.sample(range(len(dset)), n_pieces)
-  print ('[sampled pieces]', pieces)
+def generate(p_data, rc, pc):
+  # dset = REMIFullSongTransformerDataset(
+  #   data_dir, vocab_path, 
+  #   do_augment=False,
+  #   model_enc_seqlen=config['data']['enc_seqlen'], 
+  #   model_dec_seqlen=config['generate']['dec_seqlen'],
+  #   model_max_bars=config['generate']['max_bars'],
+  #   pieces=pickle_load(data_split),
+  #   pad_to_same=False
+  # )
+  # print(dset)
+  # pieces = random.sample(range(len(dset)), n_pieces)
+  # print ('[sampled pieces]', pieces)
   
   mconf = config['model']
   model = MuseMorphose(
@@ -220,86 +219,85 @@ if __name__ == "__main__":
     os.makedirs(out_dir)
 
   times = []
-  for p in pieces:
-    # fetch test sample
-    p_data = dset[p]
-    p_id = p_data['piece_id']
-    p_bar_id = p_data['st_bar_id']
-    p_data['enc_input'] = p_data['enc_input'][ : p_data['enc_n_bars'] ]
-    p_data['enc_padding_mask'] = p_data['enc_padding_mask'][ : p_data['enc_n_bars'] ]
+  # fetch test sample
+  p_id = random.randint()
+  # ! ...............................................................
+  p_bar_id = p_data['st_bar_id']
+  p_data['enc_input'] = p_data['enc_input'][ : p_data['enc_n_bars'] ]
+  p_data['enc_padding_mask'] = p_data['enc_padding_mask'][ : p_data['enc_n_bars'] ]
 
-    orig_p_cls_str = ''.join(str(c) for c in p_data['polyph_cls_bar'])
-    orig_r_cls_str = ''.join(str(c) for c in p_data['rhymfreq_cls_bar'])
+  orig_p_cls_str = ''.join(str(c) for c in p_data['polyph_cls_bar'])
+  orig_r_cls_str = ''.join(str(c) for c in p_data['rhymfreq_cls_bar'])
 
-    orig_song = p_data['dec_input'].tolist()[:p_data['length']]
-    orig_song = word2event(orig_song, dset.idx2event)
-    orig_out_file = os.path.join(out_dir, 'id{}_bar{}_orig'.format(
-        p, p_bar_id
+  orig_song = p_data['dec_input'].tolist()[:p_data['length']]
+  orig_song = word2event(orig_song, dset.idx2event)
+  orig_out_file = os.path.join(out_dir, 'id{}_bar{}_orig'.format(
+      p, p_bar_id
+  ))
+  print ('[info] writing to ...', orig_out_file)
+  # output reference song's MIDI
+  _, orig_tempo = remi2midi(orig_song, orig_out_file + '.mid', return_first_tempo=True, enforce_tempo=False)
+
+  # save metadata of reference song (events & attr classes)
+  print (*orig_song, sep='\n', file=open(orig_out_file + '.txt', 'a'))
+  np.save(orig_out_file + '-POLYCLS.npy', p_data['polyph_cls_bar'])
+  np.save(orig_out_file + '-RHYMCLS.npy', p_data['rhymfreq_cls_bar'])
+
+
+  for k in p_data.keys():
+    if not torch.is_tensor(p_data[k]):
+      p_data[k] = numpy_to_tensor(p_data[k], device=device)
+    else:
+      p_data[k] = p_data[k].to(device)
+
+  p_latents = get_latent_embedding_fast(
+                model, p_data, 
+                use_sampling=config['generate']['use_latent_sampling'],
+                sampling_var=config['generate']['latent_sampling_var']
+              )
+  p_cls_diff = np.zeros(n_samples_per_piece) + pc
+  r_cls_diff = np.zeros(n_samples_per_piece) + rc
+
+  piece_entropies = []
+  for samp in range(n_samples_per_piece):
+    p_polyph_cls = (p_data['polyph_cls_bar'] + p_cls_diff[samp]).clamp(0, 7).long()
+    p_rfreq_cls = (p_data['rhymfreq_cls_bar'] + r_cls_diff[samp]).clamp(0, 7).long()
+
+    print ('[info] piece: {}, bar: {}'.format(p_id, p_bar_id))
+    out_file = os.path.join(out_dir, 'id{}_bar{}_sample{:02d}_poly{}_rhym{}'.format(
+      p, p_bar_id, samp + 1,
+      '+{}'.format(p_cls_diff[samp]) if p_cls_diff[samp] >= 0 else p_cls_diff[samp], 
+      '+{}'.format(r_cls_diff[samp]) if r_cls_diff[samp] >= 0 else r_cls_diff[samp]
+    ))      
+    print ('[info] writing to ...', out_file)
+    if os.path.exists(out_file + '.txt'):
+      print ('[info] file exists, skipping ...')
+      continue
+
+    # print (p_polyph_cls, p_rfreq_cls)
+
+    # generate
+    song, t_sec, entropies = generate_on_latent_ctrl_vanilla_truncate(
+                                model, p_latents, p_rfreq_cls, p_polyph_cls, dset.event2idx, dset.idx2event,
+                                max_input_len=config['generate']['max_input_dec_seqlen'], 
+                                truncate_len=min(512, config['generate']['max_input_dec_seqlen'] - 32), 
+                                nucleus_p=config['generate']['nucleus_p'], 
+                                temperature=config['generate']['temperature'],
+                                
+                              )
+    times.append(t_sec)
+
+    song = word2event(song, dset.idx2event)
+    print (*song, sep='\n', file=open(out_file + '.txt', 'a'))
+    remi2midi(song, out_file + '.mid', enforce_tempo=True, enforce_tempo_val=orig_tempo)
+
+    # save metadata of the generation
+    np.save(out_file + '-POLYCLS.npy', tensor_to_numpy(p_polyph_cls))
+    np.save(out_file + '-RHYMCLS.npy', tensor_to_numpy(p_rfreq_cls))
+    print ('[info] piece entropy: {:.4f} (+/- {:.4f})'.format(
+      entropies.mean(), entropies.std()
     ))
-    print ('[info] writing to ...', orig_out_file)
-    # output reference song's MIDI
-    _, orig_tempo = remi2midi(orig_song, orig_out_file + '.mid', return_first_tempo=True, enforce_tempo=False)
-
-    # save metadata of reference song (events & attr classes)
-    print (*orig_song, sep='\n', file=open(orig_out_file + '.txt', 'a'))
-    np.save(orig_out_file + '-POLYCLS.npy', p_data['polyph_cls_bar'])
-    np.save(orig_out_file + '-RHYMCLS.npy', p_data['rhymfreq_cls_bar'])
-
-
-    for k in p_data.keys():
-      if not torch.is_tensor(p_data[k]):
-        p_data[k] = numpy_to_tensor(p_data[k], device=device)
-      else:
-        p_data[k] = p_data[k].to(device)
-
-    p_latents = get_latent_embedding_fast(
-                  model, p_data, 
-                  use_sampling=config['generate']['use_latent_sampling'],
-                  sampling_var=config['generate']['latent_sampling_var']
-                )
-    p_cls_diff = random_shift_attr_cls(n_samples_per_piece)
-    r_cls_diff = random_shift_attr_cls(n_samples_per_piece)
-
-    piece_entropies = []
-    for samp in range(n_samples_per_piece):
-      p_polyph_cls = (p_data['polyph_cls_bar'] + p_cls_diff[samp]).clamp(0, 7).long()
-      p_rfreq_cls = (p_data['rhymfreq_cls_bar'] + r_cls_diff[samp]).clamp(0, 7).long()
-
-      print ('[info] piece: {}, bar: {}'.format(p_id, p_bar_id))
-      out_file = os.path.join(out_dir, 'id{}_bar{}_sample{:02d}_poly{}_rhym{}'.format(
-        p, p_bar_id, samp + 1,
-        '+{}'.format(p_cls_diff[samp]) if p_cls_diff[samp] >= 0 else p_cls_diff[samp], 
-        '+{}'.format(r_cls_diff[samp]) if r_cls_diff[samp] >= 0 else r_cls_diff[samp]
-      ))      
-      print ('[info] writing to ...', out_file)
-      if os.path.exists(out_file + '.txt'):
-        print ('[info] file exists, skipping ...')
-        continue
-
-      # print (p_polyph_cls, p_rfreq_cls)
-
-      # generate
-      song, t_sec, entropies = generate_on_latent_ctrl_vanilla_truncate(
-                                  model, p_latents, p_rfreq_cls, p_polyph_cls, dset.event2idx, dset.idx2event,
-                                  max_input_len=config['generate']['max_input_dec_seqlen'], 
-                                  truncate_len=min(512, config['generate']['max_input_dec_seqlen'] - 32), 
-                                  nucleus_p=config['generate']['nucleus_p'], 
-                                  temperature=config['generate']['temperature'],
-                                  
-                                )
-      times.append(t_sec)
-
-      song = word2event(song, dset.idx2event)
-      print (*song, sep='\n', file=open(out_file + '.txt', 'a'))
-      remi2midi(song, out_file + '.mid', enforce_tempo=True, enforce_tempo_val=orig_tempo)
-
-      # save metadata of the generation
-      np.save(out_file + '-POLYCLS.npy', tensor_to_numpy(p_polyph_cls))
-      np.save(out_file + '-RHYMCLS.npy', tensor_to_numpy(p_rfreq_cls))
-      print ('[info] piece entropy: {:.4f} (+/- {:.4f})'.format(
-        entropies.mean(), entropies.std()
-      ))
-      piece_entropies.append(entropies.mean())
+    piece_entropies.append(entropies.mean())
 
   print ('[time stats] {} songs, generation time: {:.2f} secs (+/- {:.2f})'.format(
     n_pieces * n_samples_per_piece, np.mean(times), np.std(times)
@@ -307,3 +305,4 @@ if __name__ == "__main__":
   print ('[entropy] {:.4f} (+/- {:.4f})'.format(
     np.mean(piece_entropies), np.std(piece_entropies)
   ))
+  return out_file + '.mid'

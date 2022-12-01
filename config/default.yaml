@@ -49,6 +49,6 @@ generate:
     nucleus_p:                  0.9
     use_latent_sampling:        False
     latent_sampling_var:        0.0
-    max_bars:                   16       # could be set to match the longest input piece during generation (inference)
+    max_bars:                   32       # could be set to match the longest input piece during generation (inference)
     dec_seqlen:                 1280     # could be set to match the longest input piece during generation (inference)
     max_input_dec_seqlen:       1024     # should be set to equal to or less than `dec_seqlen` used during training
