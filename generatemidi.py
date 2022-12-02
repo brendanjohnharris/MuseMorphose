@@ -1,4 +1,5 @@
 import sys, os, random, time
+import pickle
 import wget
 from copy import deepcopy
 sys.path.append(os.path.join(__file__, 'model'))
@@ -8,6 +9,7 @@ from musemorphose import MuseMorphose
 
 from utilities import pickle_load, numpy_to_tensor, tensor_to_numpy
 from remi2midi import remi2midi
+import remi
 
 import torch
 import yaml
@@ -189,21 +191,43 @@ def generate_on_latent_ctrl_vanilla_truncate(
   return generated_final[:-1], time.time() - time_st, np.array(entropies)
 
 
+def midi2remi(file_path):
+  note_items, tempo_items = remi.read_items(file_path)
+  note_items = remi.quantize_items(note_items)
+  chord_items = remi.extract_chords(note_items)
+  items = chord_items + tempo_items + note_items
+  max_time = note_items[-1].end
+  groups = remi.group_items(items, max_time) 
+  events = remi.item2event(groups)
+  return [vars(e) for e in events]
 
-def generate(p_data, rc, pc):
-  # dset = REMIFullSongTransformerDataset(
-  #   data_dir, vocab_path, 
-  #   do_augment=False,
-  #   model_enc_seqlen=config['data']['enc_seqlen'], 
-  #   model_dec_seqlen=config['generate']['dec_seqlen'],
-  #   model_max_bars=config['generate']['max_bars'],
-  #   pieces=pickle_load(data_split),
-  #   pad_to_same=False
-  # )
+def event2dataset(events):
+  path = os.path.join('/tmp/', str(random.randint(1, 2**32)))
+  os.makedirs(path)
+  with open(os.path.join(path, str(random.randint(1, 2**32))+'.pkl'), 'wb') as handle:
+    pickle.dump(([10], events), handle, protocol=pickle.HIGHEST_PROTOCOL)
+  dset = REMIFullSongTransformerDataset(
+    path, vocab_path, 
+    do_augment=False,
+    model_enc_seqlen=config['data']['enc_seqlen'], 
+    model_dec_seqlen=config['generate']['dec_seqlen'],
+    model_max_bars=config['generate']['max_bars'],
+    pieces=[],
+    pad_to_same=False, use_attr_cls=False
+  )
+  return dset
+
+def midi2dataset(file_path):
+  events = midi2remi(file_path)
+  dataset = event2dataset(events)
+  return dataset
+
+
+def generate(dset, rc, pc):
+
   # print(dset)
   # pieces = random.sample(range(len(dset)), n_pieces)
   # print ('[sampled pieces]', pieces)
-  
   mconf = config['model']
   model = MuseMorphose(
     mconf['enc_n_layer'], mconf['enc_n_head'], mconf['enc_d_model'], mconf['enc_d_ff'],
@@ -220,7 +244,7 @@ def generate(p_data, rc, pc):
 
   times = []
   # fetch test sample
-  p_id = random.randint()
+  p_id = random.randint(1, 2**32)
   # ! ...............................................................
   p_bar_id = p_data['st_bar_id']
   p_data['enc_input'] = p_data['enc_input'][ : p_data['enc_n_bars'] ]
@@ -239,9 +263,9 @@ def generate(p_data, rc, pc):
   _, orig_tempo = remi2midi(orig_song, orig_out_file + '.mid', return_first_tempo=True, enforce_tempo=False)
 
   # save metadata of reference song (events & attr classes)
-  print (*orig_song, sep='\n', file=open(orig_out_file + '.txt', 'a'))
-  np.save(orig_out_file + '-POLYCLS.npy', p_data['polyph_cls_bar'])
-  np.save(orig_out_file + '-RHYMCLS.npy', p_data['rhymfreq_cls_bar'])
+  # print (*orig_song, sep='\n', file=open(orig_out_file + '.txt', 'a'))
+  # np.save(orig_out_file + '-POLYCLS.npy', p_data['polyph_cls_bar'])
+  # np.save(orig_out_file + '-RHYMCLS.npy', p_data['rhymfreq_cls_bar'])
 
 
   for k in p_data.keys():

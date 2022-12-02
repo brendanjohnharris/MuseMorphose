@@ -74,6 +74,7 @@ def pickle_load(path):
   return pickle.load(open(path, 'rb'))
 
 def convert_event(event_seq, event2idx, to_ndarr=True):
+  print(event2idx)
   if isinstance(event_seq[0], dict):
     event_seq = [event2idx['{}_{}'.format(e['name'], e['value'])] for e in event_seq]
   else:

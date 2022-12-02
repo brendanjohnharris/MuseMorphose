@@ -3,3 +3,4 @@ miditoolkit
 PyYAML
 scipy
 numpy
+wget
