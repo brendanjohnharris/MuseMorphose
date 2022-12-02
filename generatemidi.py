@@ -16,6 +16,7 @@ import yaml
 import numpy as np
 from scipy.stats import entropy
 
+nbars = 64
 config_path = os.path.join(os.path.dirname(__file__), 'config', 'default.yaml')
 config = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
 
@@ -107,7 +108,7 @@ def generate_on_latent_ctrl_vanilla_truncate(
     rfreq_placeholder[:len(generated), 0] = rfreq_cls[0]
     polyph_placeholder[:len(generated), 0] = polyph_cls[0]
     
-  target_bars, generated_bars = 32, 0 #latents.size(0), 0
+  target_bars, generated_bars = nbars, 0 #latents.size(0), 0
 
   steps = 0
   time_st = time.time()
