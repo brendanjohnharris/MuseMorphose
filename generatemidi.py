@@ -107,7 +107,7 @@ def generate_on_latent_ctrl_vanilla_truncate(
     rfreq_placeholder[:len(generated), 0] = rfreq_cls[0]
     polyph_placeholder[:len(generated), 0] = polyph_cls[0]
     
-  target_bars, generated_bars = latents.size(0), 0
+  target_bars, generated_bars = 32, 0 #latents.size(0), 0
 
   steps = 0
   time_st = time.time()
@@ -118,15 +118,15 @@ def generate_on_latent_ctrl_vanilla_truncate(
   generated_final = deepcopy(generated)
   entropies = []
 
+
   while generated_bars < target_bars:
     if len(generated) == 1:
       dec_input = numpy_to_tensor([generated], device=device).long()
     else:
       dec_input = numpy_to_tensor([generated], device=device).permute(1, 0).long()
-
-    latent_placeholder[len(generated)-1, 0, :] = latents[ generated_bars ]
-    rfreq_placeholder[len(generated)-1, 0] = rfreq_cls[ generated_bars ]
-    polyph_placeholder[len(generated)-1, 0] = polyph_cls[ generated_bars ]
+    latent_placeholder[len(generated)-1, 0, :] = latents[ generated_bars % latents.size(0) ]
+    rfreq_placeholder[len(generated)-1, 0] = rfreq_cls[0] #[ generated_bars ]
+    polyph_placeholder[len(generated)-1, 0] = polyph_cls[0] #[ generated_bars ]
 
     dec_seg_emb = latent_placeholder[:len(generated), :]
     dec_rfreq_cls = rfreq_placeholder[:len(generated), :]
@@ -224,15 +224,11 @@ def midi2dataset(file_path):
 
 
 def generate(dset, rc, pc):
-
-  # print(dset)
-  # pieces = random.sample(range(len(dset)), n_pieces)
-  # print ('[sampled pieces]', pieces)
   mconf = config['model']
   model = MuseMorphose(
     mconf['enc_n_layer'], mconf['enc_n_head'], mconf['enc_d_model'], mconf['enc_d_ff'],
     mconf['dec_n_layer'], mconf['dec_n_head'], mconf['dec_d_model'], mconf['dec_d_ff'],
-    mconf['d_latent'], mconf['d_embed'], dset.vocab_size,
+    mconf['d_latent'], mconf['d_embed'], 333,
     d_polyph_emb=mconf['d_polyph_emb'], d_rfreq_emb=mconf['d_rfreq_emb'],
     cond_mode=mconf['cond_mode']
   ).to(device)
@@ -245,14 +241,14 @@ def generate(dset, rc, pc):
   times = []
   # fetch test sample
   p_id = random.randint(1, 2**32)
-  # ! ...............................................................
+  p_data = dset[0]
   p_bar_id = p_data['st_bar_id']
   p_data['enc_input'] = p_data['enc_input'][ : p_data['enc_n_bars'] ]
   p_data['enc_padding_mask'] = p_data['enc_padding_mask'][ : p_data['enc_n_bars'] ]
 
   orig_p_cls_str = ''.join(str(c) for c in p_data['polyph_cls_bar'])
   orig_r_cls_str = ''.join(str(c) for c in p_data['rhymfreq_cls_bar'])
-
+  p = random.randint(0, 2**32)
   orig_song = p_data['dec_input'].tolist()[:p_data['length']]
   orig_song = word2event(orig_song, dset.idx2event)
   orig_out_file = os.path.join(out_dir, 'id{}_bar{}_orig'.format(
